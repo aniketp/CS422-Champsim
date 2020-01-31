@@ -1,0 +1,53 @@
+#include "ooo_cpu.h"
+#include <bitset>
+
+#define GLOBAL_HISTORY_LENGTH   1000
+
+#define BIMODAL_SIZE            16
+#define TAGE_SIZE               12
+
+#define NUM_TAGE_TABLES         4
+#define BIMODAL_PRED_SIZE       2
+#define TAGE_PRED_SIZE          3
+#define TAGE_USEFUL_SIZE        2
+#define TAGE_TAG_SIZE           8
+
+
+typedef struct bimodalEntry {
+    uint8_t pred : BIMODAL_PRED_SIZE;
+} bimodal_t;
+
+typedef struct tageEntry {
+    uint8_t pred : TAGE_PRED_SIZE;
+    uint8_t use : TAGE_USEFUL_SIZE;
+    uint8_t tag : TAGE_TAG_SIZE;
+} tage_t;
+
+typedef struct prediction {
+    uint8_t pred;
+    uint8_t altPred;
+    uint8_t index;
+    uint8_t altIndex;
+    uint8_t table;
+    uint8_t altTable;
+} prediction_t;
+
+// Global data structures
+bimodal_t bimodalTable[NUM_CPUS][BIMODAL_SIZE];
+tage_t tageTable[NUM_CPUS][NUM_TAGE_TABLES][TAGE_SIZE];
+prediction_t predict[NUM_CPUS];
+
+bitset<GLOBAL_HISTORY_LENGTH> history;
+
+void O3_CPU::initialize_branch_predictor()
+{
+}
+
+uint8_t O3_CPU::predict_branch(uint64_t ip)
+{
+	return 0;
+}
+
+void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
+{
+}
