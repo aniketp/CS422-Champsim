@@ -12,6 +12,17 @@
 #define TAGE_USEFUL_SIZE        2
 #define TAGE_TAG_SIZE           8
 
+#define BIMODAL_WEAKLY_TAKEN    2   // 2 bit
+#define TAGE_WEAKLY_TAKEN       4   // 3 bit
+
+// TODO: Change this (length of history for indexing on tage tables)
+#define TAGE_HISTORY_1          5
+#define TAGE_HISTORY_2          15
+#define TAGE_HISTORY_3          44
+#define TAGE_HISTORY_4          130
+
+#define TAKEN       1
+#define NOT_TAKEN   0
 
 typedef struct bimodalEntry {
     uint8_t pred : BIMODAL_PRED_SIZE;
@@ -33,19 +44,74 @@ typedef struct prediction {
 } prediction_t;
 
 // Global data structures
-bimodal_t bimodalTable[NUM_CPUS][BIMODAL_SIZE];
-tage_t tageTable[NUM_CPUS][NUM_TAGE_TABLES][TAGE_SIZE];
+bimodal_t bimodalTable[NUM_CPUS][1 << (BIMODAL_SIZE)];
+tage_t tageTable[NUM_CPUS][NUM_TAGE_TABLES][1 << (TAGE_SIZE)];
 prediction_t predict[NUM_CPUS];
 
 bitset<GLOBAL_HISTORY_LENGTH> history;
 
 void O3_CPU::initialize_branch_predictor()
 {
+    cout << "CPU " << cpu << " LTAGE Branch Predictor\n";
+
+    int bimodal_size = 1 << BIMODAL_SIZE;
+    for (int i = 0; i < bimodal_size; ++i)
+        bimodalTable[cpu][i].pred = BIMODAL_WEAKLY_TAKEN;
+    
+    int tage_size = 1 << TAGE_SIZE;
+    memset(tageTable[cpu], 0, tage_size * sizeof(tage_t));
+    history.reset();
 }
 
 uint8_t O3_CPU::predict_branch(uint64_t ip)
 {
-	return 0;
+    int bimodal_size = 1 << BIMODAL_SIZE;
+    int bimodalIndex = ip % bimodal_size;
+
+    // TODO: Initialize this properly
+    int tageTag[NUM_TAGE_TABLES] = {0};
+    int tageIndex[NUM_TAGE_TABLES] = {0};
+
+    predict[cpu].table = NUM_TAGE_TABLES;       // Init value = 4
+    predict[cpu].altTable = NUM_TAGE_TABLES;    // Init value = 4
+
+    // Check for tag hits (this will be the provider component)
+    for (int i = NUM_TAGE_TABLES - 1; i >= 0; --i) {
+        if (tageTable[cpu][i][tageIndex[i]].pred == tageTag[i]) {
+            predict[cpu].table = i;
+            predict[cpu].index = tageIndex[i];
+            break;
+        }
+    }
+
+    // Now, check for alternate prediction component
+    for (int i = predict[cpu].table - 1; i >= 0; --i) {
+        if (tageTable[cpu][i][tageIndex[i]].pred == tageTag[i]) {
+            predict[cpu].altTable = i;
+            predict[cpu].altIndex = tageIndex[i];
+            break;
+        }  
+    }
+
+    // If alternate prediction was not obtained, set altPred to Bimodal
+    if (predict[cpu].altTable == NUM_TAGE_TABLES) {
+        predict[cpu].altPred = (bimodalTable[cpu][bimodalIndex].pred >=
+            BIMODAL_WEAKLY_TAKEN) ? TAKEN : NOT_TAKEN;
+    } else {
+        predict[cpu].altPred = (tageTable[cpu][predict[cpu].altTable]
+            [predict[cpu].altIndex].pred >= TAGE_WEAKLY_TAKEN) ?
+            TAKEN : NOT_TAKEN;
+    }
+
+    // If predictor component could not be found, set Pred to Bimodal
+    if (predict[cpu].table == NUM_TAGE_TABLES) {
+        predict[cpu].pred = predict[cpu].altPred;
+    } else {
+        predict[cpu].pred = (tageTable[cpu][predict[cpu].table]
+            [predict[cpu].index].pred >= TAGE_WEAKLY_TAKEN) ? TAKEN : NOT_TAKEN;
+    }
+
+    return predict[cpu].pred;
 }
 
 void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
