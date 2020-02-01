@@ -12,6 +12,8 @@
 #define TAGE_USEFUL_SIZE        2
 #define TAGE_TAG_SIZE           8
 
+#define BIMODAL_MAX             3   // b(11)
+#define TAGE_MAX                7   // b(111)
 #define BIMODAL_WEAKLY_TAKEN    2   // 2 bit
 #define TAGE_WEAKLY_TAKEN       4   // 3 bit
 
@@ -47,6 +49,8 @@ typedef struct prediction {
 bimodal_t bimodalTable[NUM_CPUS][1 << (BIMODAL_SIZE)];
 tage_t tageTable[NUM_CPUS][NUM_TAGE_TABLES][1 << (TAGE_SIZE)];
 prediction_t predict[NUM_CPUS];
+int tageTag[NUM_TAGE_TABLES];
+int tageIndex[NUM_TAGE_TABLES];
 
 bitset<GLOBAL_HISTORY_LENGTH> history;
 
@@ -65,12 +69,11 @@ void O3_CPU::initialize_branch_predictor()
 
 uint8_t O3_CPU::predict_branch(uint64_t ip)
 {
-    int bimodal_size = 1 << BIMODAL_SIZE;
-    int bimodalIndex = ip % bimodal_size;
+    uint8_t bimodalIndex = ip % (1 << BIMODAL_SIZE);
 
     // TODO: Initialize this properly
-    int tageTag[NUM_TAGE_TABLES] = {0};
-    int tageIndex[NUM_TAGE_TABLES] = {0};
+    bzero(tageTag, NUM_TAGE_TABLES * sizeof(int));
+    bzero(tageTable, NUM_TAGE_TABLES * sizeof(int));
 
     predict[cpu].table = NUM_TAGE_TABLES;       // Init value = 4
     predict[cpu].altTable = NUM_TAGE_TABLES;    // Init value = 4
@@ -116,4 +119,70 @@ uint8_t O3_CPU::predict_branch(uint64_t ip)
 
 void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
 {
+    // Not a good idea to consume stack memory
+    uint8_t predtable = predict[cpu].table;
+    uint8_t predindex = predict[cpu].index;
+    uint8_t bimodalIndex = ip % (1 << BIMODAL_SIZE);
+
+    // Update "u" bit in provider tagetable if altPred is different from pred
+    if (predtable != NUM_TAGE_TABLES &&
+        (predict[cpu].pred != predict[cpu].altPred)) {
+        if (predict[cpu].pred == taken)
+            ++(tageTable[cpu][predtable][predindex].use);
+        else
+            --(tageTable[cpu][predtable][predindex].use);    
+    }
+
+    // Updates on a correct branch prediction
+    // TODO: Optimizations for newly allocated entries
+    if (predict[cpu].pred == taken) {
+        if (predtable != NUM_TAGE_TABLES) {
+            // One of the tage table was the provider component
+            if (tageTable[cpu][predtable][predindex].pred < TAGE_MAX)
+                ++(tageTable[cpu][predtable][predindex].pred);
+        } else {
+            // Bimodal table was the provider component, update pred value
+            if (bimodalTable[cpu][bimodalIndex].pred < BIMODAL_MAX)
+                ++(bimodalTable[cpu][bimodalIndex].pred);
+        }
+    } else {    // Our prediction was incorrect
+        // STEP 1: Update the pred value in provider component
+        if (predtable != NUM_TAGE_TABLES) {
+            // One of the tage table was the provider component
+            if (tageTable[cpu][predtable][predindex].pred > 0)
+                --(tageTable[cpu][predtable][predindex].pred);
+        } else {
+            // Bimodal table was the provider component, update pred value
+            if (bimodalTable[cpu][bimodalIndex].pred > 0)
+                --(bimodalTable[cpu][bimodalIndex].pred);
+        }
+
+        // STEP 2: Check arrangements for entry allocation
+        // Check if the provider table is the longest history table. If not,
+        // then an entry can be allocated.
+        if (predtable != NUM_TAGE_TABLES - 1) {
+            if (predtable == NUM_TAGE_TABLES) predtable = -1;
+            
+            // TODO: Implement "rule B" of TAGE paper.
+            //
+            // Keep track of entries with u = 0.
+            // bitset<NUM_TAGE_TABLES> allocTable;
+            uint8_t uflag = NUM_TAGE_TABLES;
+            for (int i = predtable + 1; i < NUM_TAGE_TABLES; ++i) {
+                if (tageTable[cpu][i][tageIndex[i]].use == 0) uflag = i;
+            }
+            // If no useful bit was zero then decrement them all by 1.
+            // Else allocate a new entry for the same.
+            if (uflag != NUM_TAGE_TABLES) {
+                tageTable[cpu][uflag][tageIndex[uflag]].tag = tageTag[uflag];
+                tageTable[cpu][uflag][tageIndex[uflag]].use = 0;
+                tageTable[cpu][uflag][tageIndex[uflag]].pred = TAGE_WEAKLY_TAKEN;
+            } else {
+                for (int i = predtable + 1; i < NUM_TAGE_TABLES; ++i) {
+                    --(tageTable[cpu][i][tageIndex[i]].use);
+                    assert(tageTable[cpu][i][tageIndex[i]].use >= 0);
+                }
+            }
+        }
+    }
 }
