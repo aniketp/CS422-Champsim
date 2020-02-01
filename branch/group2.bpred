@@ -2,15 +2,16 @@
 #include <bitset>
 
 #define GLOBAL_HISTORY_LENGTH   1000
+#define CLOCK_RESET_LIMIT       256000  // 256k as in paper
 
-#define BIMODAL_SIZE            16
-#define TAGE_SIZE               12
+#define BIMODAL_SIZE            16      // 2^16 : Num entries in bimodal table
+#define TAGE_SIZE               12      // 2^12 : Num entries in tage table
 
 #define NUM_TAGE_TABLES         4
-#define BIMODAL_PRED_SIZE       2
-#define TAGE_PRED_SIZE          3
-#define TAGE_USEFUL_SIZE        2
-#define TAGE_TAG_SIZE           8
+#define BIMODAL_PRED_SIZE       2       // Pred variable in Bimodal table
+#define TAGE_PRED_SIZE          3       // Pred variable in tage table
+#define TAGE_USEFUL_SIZE        2       // Useful variable in tage table
+#define TAGE_TAG_SIZE           8       // Tag variable in tage table
 
 #define BIMODAL_MAX             3   // b(11)
 #define TAGE_MAX                7   // b(111)
@@ -23,8 +24,11 @@
 #define TAGE_HISTORY_3          44
 #define TAGE_HISTORY_4          130
 
-#define TAKEN       1
-#define NOT_TAKEN   0
+#define CLOCK_STATE_1           1   // reset LSB of u
+#define CLOCK_STATE_2           2   // reset MSB of u
+
+#define TAKEN                   1
+#define NOT_TAKEN               0
 
 typedef struct bimodalEntry {
     uint8_t pred : BIMODAL_PRED_SIZE;
@@ -49,8 +53,11 @@ typedef struct prediction {
 bimodal_t bimodalTable[NUM_CPUS][1 << (BIMODAL_SIZE)];
 tage_t tageTable[NUM_CPUS][NUM_TAGE_TABLES][1 << (TAGE_SIZE)];
 prediction_t predict[NUM_CPUS];
-int tageTag[NUM_TAGE_TABLES];
-int tageIndex[NUM_TAGE_TABLES];
+uint32_t tageTag[NUM_TAGE_TABLES];
+uint32_t tageIndex[NUM_TAGE_TABLES];
+uint32_t global_clock;
+uint8_t clockstate;
+
 
 bitset<GLOBAL_HISTORY_LENGTH> history;
 
@@ -124,6 +131,10 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
     uint8_t predindex = predict[cpu].index;
     uint8_t bimodalIndex = ip % (1 << BIMODAL_SIZE);
 
+    // Update global history
+    history <<= 1;
+    if (taken) history.set(0, 1); 
+
     // Update "u" bit in provider tagetable if altPred is different from pred
     if (predtable != NUM_TAGE_TABLES &&
         (predict[cpu].pred != predict[cpu].altPred)) {
@@ -185,4 +196,17 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
             }
         }
     }
+
+    // Global clock handling: Check if it is time to flip bits of "u"
+    if ((++global_clock) == CLOCK_RESET_LIMIT) {
+        clockstate = (clockstate == CLOCK_STATE_1) ? CLOCK_STATE_2 : CLOCK_STATE_1;
+        global_clock = 0;
+
+        // Reset either MSB or LSB of u for depending on CLOCK_STATE
+        for (int i = 0; i < NUM_TAGE_TABLES; ++i) {
+            for (int j = 0; j < (1 << TAGE_SIZE); ++j)
+                tageTable[cpu][i][j].use &= clockstate;
+        }
+    }
+
 }
