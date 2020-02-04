@@ -251,13 +251,16 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
         if (predtable != NUM_TAGE_TABLES - 1) {
             if (predtable == NUM_TAGE_TABLES) predtable = -1;
             
-            // TODO: Implement "rule B" of TAGE paper.
-            //
             // Keep track of entries with u = 0.
-            // bitset<NUM_TAGE_TABLES> allocTable;
+            // Use probabilistic methods to avoid ping-pong of entry
+            // allocation and eviction.
+            srand(time(NULL));
             uint8_t uflag = NUM_TAGE_TABLES;
             for (int i = predtable + 1; i < NUM_TAGE_TABLES; ++i) {
-                if (tageTable[cpu][i][tageIndex[cpu][i]].use == 0) uflag = i;
+                if (tageTable[cpu][i][tageIndex[cpu][i]].use == 0) {
+                    uflag = i;
+                    if (rand() % NUM_TAGE_TABLES <= NUM_TAGE_TABLES/2) break;
+                }
             }
             // If no useful bit was zero then decrement them all by 1.
             // Else allocate a new entry for the same.
