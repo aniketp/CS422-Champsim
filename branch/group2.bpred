@@ -50,9 +50,9 @@ typedef struct tageEntry {
 } tage_t;
 
 typedef struct loopEntry {
-	uint8_t iterCount : LOOP_IT_SIZE;
-	uint8_t currentIter : LOOP_CURR_SIZE;
-	uint8_t tag : LOOP_TAG_SIZE;
+	uint16_t iterCount : LOOP_IT_SIZE;
+	uint16_t currentIter : LOOP_CURR_SIZE;
+	uint16_t tag : LOOP_TAG_SIZE;
 	uint8_t conf : LOOP_CONF_SIZE;
 	uint8_t age : LOOP_AGE_SIZE;
 } loop_t;
@@ -108,7 +108,7 @@ void init_csr(uint32_t cpu, int table) {
 
 void update_csr(uint32_t cpu, int table) {
     // update tag index
-    csr_t *index = &tageIndex[cpu][table];
+    csr_t *index = &csrIndex[cpu][table];
     index->value = (index->value << 1) + history[0];
     index->value ^= ((index->value & (1 << index->targetLength)) >> index->targetLength);
     index->value ^= (history[tageHistory[table]] << (tageHistory[table] % index->targetLength));
@@ -116,7 +116,7 @@ void update_csr(uint32_t cpu, int table) {
     
     // update tage tag csr0 and csr1
     for (int i = 0; i < 2; ++i) {
-        csr_t *tag = &tageTag[cpu][table][i];
+        csr_t *tag = &csrTag[cpu][table][i];
         tag->value = (tag->value << 1) + history[0];
         tag->value ^= ((tag->value & (1 << tag->targetLength)) >> tag->targetLength);
         tag->value ^= (history[tageHistory[table]] << (tageHistory[table] % tag->targetLength));
@@ -257,7 +257,7 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
             // bitset<NUM_TAGE_TABLES> allocTable;
             uint8_t uflag = NUM_TAGE_TABLES;
             for (int i = predtable + 1; i < NUM_TAGE_TABLES; ++i) {
-                if (tageTable[cpu][i][tageIndex[i]].use == 0) uflag = i;
+                if (tageTable[cpu][i][tageIndex[cpu][i]].use == 0) uflag = i;
             }
             // If no useful bit was zero then decrement them all by 1.
             // Else allocate a new entry for the same.
