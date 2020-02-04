@@ -2,13 +2,14 @@
 #include <bitset>
 
 #define GLOBAL_HISTORY_LENGTH   1000
-#define CLOCK_RESET_LIMIT       256000  // 256k as in paper
+#define CLOCK_RESET_LIMIT       512000  // 512k as in ltage paper
 
 #define BIMODAL_SIZE            16      // 2^16 : Num entries in bimodal table
 #define TAGE_SIZE               12      // 2^12 : Num entries in tage table
 #define LOOP_SIZE               10      // 2^10 : Num entries in loop table
 
 #define NUM_TAGE_TABLES         4
+#define NUM_CSR_TAGS            2
 #define BIMODAL_PRED_SIZE       2       // Pred variable in Bimodal table
 #define TAGE_PRED_SIZE          3       // Pred variable in tage table
 #define TAGE_USEFUL_SIZE        2       // Useful variable in tage table
@@ -19,13 +20,13 @@
 #define LOOP_AGE_SIZE           8       // 2^8 : Num age in entry
 #define LOOP_CONF_SIZE          2       // Confidence variable in loop table
 
-#define LOOP_IT_MAX             14  // 2^14 : Max iteration count
-#define LOOP_AGE_MAX            8   // 2^8 : Highest possible age
-#define LOOP_CONF_MAX           3   // b(11)
-#define BIMODAL_MAX             3   // b(11)
-#define TAGE_MAX                7   // b(111)
-#define BIMODAL_WEAKLY_TAKEN    2   // 2 bit
-#define TAGE_WEAKLY_TAKEN       4   // 3 bit
+#define LOOP_IT_MAX             14      // 2^14 : Max iteration count
+#define LOOP_AGE_MAX            8       // 2^8 : Highest possible age
+#define LOOP_CONF_MAX           3       // b(11)
+#define BIMODAL_MAX             3       // b(11)
+#define TAGE_MAX                7       // b(111)
+#define BIMODAL_WEAKLY_TAKEN    2       // 2 bit
+#define TAGE_WEAKLY_TAKEN       4       // 3 bit
 
 // TODO: Change this (length of history for indexing on tage tables)
 #define TAGE_HISTORY_1          5
@@ -38,8 +39,8 @@
 #define TAGE_HISTORY_8          256
 #define TAGE_HISTORY_9          512
 
-#define CLOCK_STATE_1           1   // reset LSB of u
-#define CLOCK_STATE_2           2   // reset MSB of u
+#define CLOCK_STATE_1           1       // reset LSB of u
+#define CLOCK_STATE_2           2       // reset MSB of u
 
 #define TAKEN                   1
 #define NOT_TAKEN               0
@@ -77,17 +78,17 @@ typedef struct prediction {
 } prediction_t;
 
 // Global data structures
-bimodal_t bimodalTable[NUM_CPUS][1 << (BIMODAL_SIZE)];
-tage_t tageTable[NUM_CPUS][NUM_TAGE_TABLES][1 << (TAGE_SIZE)];
-loop_t loopTable[NUM_CPUS][1 << (LOOP_SIZE)];
-csr_t csrIndex[NUM_CPUS][NUM_TAGE_TABLES];
-csr_t csrTag[NUM_CPUS][NUM_TAGE_TABLES][2];
+bimodal_t    bimodalTable[NUM_CPUS][1 << (BIMODAL_SIZE)];
+tage_t       tageTable[NUM_CPUS][NUM_TAGE_TABLES][1 << (TAGE_SIZE)];
+loop_t       loopTable[NUM_CPUS][1 << (LOOP_SIZE)];
+csr_t        csrIndex[NUM_CPUS][NUM_TAGE_TABLES];
+csr_t        csrTag[NUM_CPUS][NUM_TAGE_TABLES][NUM_CSR_TAGS];
 prediction_t predict[NUM_CPUS];
-uint32_t tageTag[NUM_CPUS][NUM_TAGE_TABLES];
-uint32_t tageIndex[NUM_CPUS][NUM_TAGE_TABLES];
-uint32_t global_clock;
-uint8_t clockstate;
-uint16_t path_history;
+uint32_t     tageTag[NUM_CPUS][NUM_TAGE_TABLES];
+uint32_t     tageIndex[NUM_CPUS][NUM_TAGE_TABLES];
+uint32_t     global_clock;
+uint8_t      clockstate;
+uint16_t     path_history;
 
 uint32_t tageHistory[NUM_TAGE_TABLES] = {
     TAGE_HISTORY_1,
@@ -106,7 +107,7 @@ void init_csr(uint32_t cpu, int table) {
     csrIndex[cpu][table].targetLength = TAGE_SIZE;
     
     // initialize tage tag csr0 and csr1
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < NUM_CSR_TAGS; ++i) {
         csrTag[cpu][table][i].value = 0;
         csrTag[cpu][table][i].targetLength = TAGE_TAG_SIZE - i;
     }
@@ -121,7 +122,7 @@ void update_csr(uint32_t cpu, int table) {
     index->value &= ((1 << index->targetLength) - 1);
     
     // update tage tag csr0 and csr1
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < NUM_CSR_TAGS; ++i) {
         csr_t *tag = &csrTag[cpu][table][i];
         tag->value = (tag->value << 1) + history[0];
         tag->value ^= ((tag->value & (1 << tag->targetLength)) >> tag->targetLength);
@@ -142,22 +143,21 @@ uint32_t get_tag(uint32_t cpu, uint64_t ip, int table) {
 
 void init_new_loop(loop_t *loop, uint16_t loopTag) {
 	loop->tag = loopTag;
-	loop->age = (1<<LOOP_AGE_MAX);
+	loop->age = (1 << LOOP_AGE_MAX) - 1;    // Prevent overflow warning
 	loop->currentIter = 1;
-	loop->iterCount = (1<<LOOP_IT_MAX); 
+	loop->iterCount = (1 << LOOP_IT_MAX) - 1;
 	loop->conf = 0;
 }
 
 void O3_CPU::initialize_branch_predictor()
 {
-    cout << "CPU " << cpu << " LTAGE Branch Predictor\n";
+    cout << "[Group 2] CPU " << cpu << " LTAGE Branch Predictor\n";
 
     int bimodal_size = 1 << BIMODAL_SIZE;
     for (int i = 0; i < bimodal_size; ++i)
         bimodalTable[cpu][i].pred = BIMODAL_WEAKLY_TAKEN;
     
-    int tage_size = 1 << TAGE_SIZE;
-    memset(tageTable[cpu], 0, tage_size * sizeof(tage_t));
+    memset(tageTable[cpu], 0, (1 << TAGE_SIZE) * sizeof(tage_t));
     memset(loopTable[cpu], 0, (1 << LOOP_SIZE) * sizeof(loop_t));
     history.reset();
     
@@ -235,28 +235,28 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
     loop_t *loop = &loopTable[cpu][loopIndex];
 
     if (loop->tag != loopTag && loop->age > 0) // there is a tag miss
-		--(loop->age); // decrease age
-	else { // there is a tag hit
-		if (loop->age == 0) // new entry OR replace an old entry
-			init_new_loop(loop, loopTag);
-	    else if (predict[cpu].pred == taken) { // Our prediction was correct
+        --(loop->age); // decrease age
+    else { // there is a tag hit
+        if (loop->age == 0) // new entry OR replace an old entry
+            init_new_loop(loop, loopTag);
+        else if (predict[cpu].pred == taken) { // Our prediction was correct
             if (loop->currentIter == loop->iterCount) {
                 loop->currentIter = 0;
                 if (loop->conf < LOOP_CONF_MAX) ++(loop->conf);
             } else 
                 ++(loop->currentIter);
         } else { // Our prediction was incorrect
-            if (loop->age == (1<<LOOP_AGE_MAX)) { // newly added entry
-					loop->iterCount = loop->currentIter;
-					loop->currentIter = 0;
-					loop->conf = 1;
-				} else // not a loop
-                    memset(loop, 0, sizeof(tage_t));
+            if (loop->age == (1 << LOOP_AGE_MAX) - 1) { // newly added entry
+                loop->iterCount = loop->currentIter;
+                loop->currentIter = 0;
+                loop->conf = 1;
+            } else // not a loop
+                memset(loop, 0, sizeof(tage_t));
         }
 
         // loop is used no need to update the other tables
-		if (loop->conf == LOOP_CONF_MAX) return;
-	}
+        if (loop->conf == LOOP_CONF_MAX) return;
+    }
 
     // Not a good idea to consume stack memory
     uint8_t predtable = predict[cpu].table;
