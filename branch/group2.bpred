@@ -240,6 +240,8 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
         if (loop->age == 0) // new entry OR replace an old entry
             init_new_loop(loop, loopTag);
         else if (predict[cpu].pred == taken) { // Our prediction was correct
+            if (loop->conf == LOOP_CONF_MAX && loop->age < ((1 << LOOP_AGE_MAX) - 1))
+                ++(loop->age); // increase age as prediction is correct and loop table is used
             if (loop->currentIter == loop->iterCount) {
                 loop->currentIter = 0;
                 if (loop->conf < LOOP_CONF_MAX) ++(loop->conf);
