@@ -251,7 +251,7 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
                 loop->currentIter = 0;
                 loop->conf = 1;
             } else // not a loop
-                memset(loop, 0, sizeof(tage_t));
+                memset(loop, 0, sizeof(loop_t));
         }
 
         // loop is used no need to update the other tables
