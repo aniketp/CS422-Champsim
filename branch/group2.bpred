@@ -23,17 +23,19 @@
 #define LOOP_IT_MAX             14      // 2^14 : Max iteration count
 #define LOOP_AGE_MAX            8       // 2^8 : Highest possible age
 #define LOOP_CONF_MAX           3       // b(11)
+#define TAGE_USEFUL_MAX         3       // b(11)
 #define BIMODAL_MAX             3       // b(11)
 #define TAGE_MAX                7       // b(111)
 #define BIMODAL_WEAKLY_TAKEN    2       // 2 bit
 #define TAGE_WEAKLY_TAKEN       4       // 3 bit
+#define TAGE_WEAKLY_NOT_TAKEN   3       // 3 bit
 
 // TODO: Change this (length of history for indexing on tage tables)
 #define TAGE_HISTORY_1          5
 #define TAGE_HISTORY_2          15
 #define TAGE_HISTORY_3          44
 #define TAGE_HISTORY_4          130
-#define TAGE_HISTORY_5          32
+#define TAGE_HISTORY_5          395
 #define TAGE_HISTORY_6          64
 #define TAGE_HISTORY_7          128
 #define TAGE_HISTORY_8          256
@@ -41,6 +43,9 @@
 
 #define CLOCK_STATE_1           1       // reset LSB of u
 #define CLOCK_STATE_2           2       // reset MSB of u
+
+#define USE_ALT_ON_NA_MAX       15
+#define USE_ALT_ON_NA_INIT      7
 
 #define TAKEN                   1
 #define NOT_TAKEN               0
@@ -88,6 +93,7 @@ uint32_t     tageTag[NUM_CPUS][NUM_TAGE_TABLES];
 uint32_t     tageIndex[NUM_CPUS][NUM_TAGE_TABLES];
 uint32_t     global_clock;
 uint8_t      clockstate;
+uint8_t      altBetter;
 uint16_t     path_history;
 
 uint32_t tageHistory[NUM_TAGE_TABLES] = {
@@ -97,7 +103,7 @@ uint32_t tageHistory[NUM_TAGE_TABLES] = {
     TAGE_HISTORY_4
 };
 
-// uint8_t offset[NUM_TAGE_TABLES] = {0,0,2,4};
+uint8_t offset[NUM_TAGE_TABLES] = { 0, 0, 2, 4 };
 
 bitset<GLOBAL_HISTORY_LENGTH> history;
 
@@ -132,7 +138,7 @@ void update_csr(uint32_t cpu, int table) {
 }
 
 uint32_t get_index(uint32_t cpu, uint64_t ip, int table) {
-    uint32_t index = ip ^ (ip >> TAGE_SIZE) ^ csrIndex[cpu][table].value ^ path_history; // ^ (path_history & ((1<<offset[table])-1));
+    uint32_t index = ip ^ (ip >> TAGE_SIZE) ^ csrIndex[cpu][table].value ^ path_history ^ (path_history & ((1<<offset[table])-1));
 	return (index & ((1 << TAGE_SIZE)-1));
 }
 
@@ -149,6 +155,10 @@ void init_new_loop(loop_t *loop, uint16_t loopTag) {
 	loop->conf = 0;
 }
 
+uint8_t is_strong(tage_t tage) {
+    return (tage.pred != TAGE_WEAKLY_NOT_TAKEN && tage.pred != TAGE_WEAKLY_TAKEN) || tage.use > 0;
+}
+
 void O3_CPU::initialize_branch_predictor()
 {
     cout << "[Group 2] CPU " << cpu << " LTAGE Branch Predictor\n";
@@ -160,6 +170,7 @@ void O3_CPU::initialize_branch_predictor()
     memset(tageTable[cpu], 0, (1 << TAGE_SIZE) * sizeof(tage_t));
     memset(loopTable[cpu], 0, (1 << LOOP_SIZE) * sizeof(loop_t));
     history.reset();
+    altBetter = USE_ALT_ON_NA_INIT;
     
     for (int i = 0; i < NUM_TAGE_TABLES; ++i)
         init_csr(cpu, i);
@@ -174,8 +185,7 @@ uint8_t O3_CPU::predict_branch(uint64_t ip)
 
     // Check for the tag-hit and conf in Loop Table
     if (loop->tag == loopTag && loop->conf == LOOP_CONF_MAX) {
-        predict[cpu].pred = (loop->currentIter < loop->iterCount) ? TAKEN : NOT_TAKEN;
-        return predict[cpu].pred;
+        return (loop->currentIter < loop->iterCount) ? TAKEN : NOT_TAKEN;
     }
 
     uint16_t bimodalIndex = ip % (1 << BIMODAL_SIZE);
@@ -224,6 +234,10 @@ uint8_t O3_CPU::predict_branch(uint64_t ip)
             [predict[cpu].index].pred >= TAGE_WEAKLY_TAKEN) ? TAKEN : NOT_TAKEN;
     }
 
+    if (predict[cpu].table != NUM_TAGE_TABLES && !is_strong(tageTable[cpu][predict[cpu].table][predict[cpu].index]) 
+            && altBetter > USE_ALT_ON_NA_INIT)
+        return predict[cpu].altPred;
+
     return predict[cpu].pred;
 }
 
@@ -239,7 +253,7 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
     else { // there is a tag hit
         if (loop->age == 0) // new entry OR replace an old entry
             init_new_loop(loop, loopTag);
-        else if (predict[cpu].pred == taken) { // Our prediction was correct
+        else if ((loop->currentIter < loop->iterCount) == taken) { // Our prediction was correct
             if (loop->conf == LOOP_CONF_MAX && loop->age < ((1 << LOOP_AGE_MAX) - 1))
                 ++(loop->age); // increase age as prediction is correct and loop table is used
             if (loop->currentIter == loop->iterCount) {
@@ -272,10 +286,21 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
     // Update "u" bit in provider tagetable if altPred is different from pred
     if (predtable != NUM_TAGE_TABLES &&
         (predict[cpu].pred != predict[cpu].altPred)) {
-        if (predict[cpu].pred == taken)
+        if (predict[cpu].pred == taken && tageTable[cpu][predtable][predindex].use < TAGE_USEFUL_MAX)
             ++(tageTable[cpu][predtable][predindex].use);
-        else
+        else if (predict[cpu].pred != taken && tageTable[cpu][predtable][predindex].use > 0)
             --(tageTable[cpu][predtable][predindex].use);    
+    }
+
+    // Update "altBetter" if alt predicts correct and provider component is incorrect
+    if (predtable != NUM_TAGE_TABLES && !is_strong(tageTable[cpu][predtable][predindex]) && 
+        predict[cpu].pred != predict[cpu].altPred) {
+            if (predict[cpu].altPred == taken) {
+                if (altBetter < USE_ALT_ON_NA_MAX)
+                    ++altBetter;
+            }
+            else if (altBetter > 0)
+                --altBetter;
     }
 
     // Updates on a correct branch prediction
@@ -324,11 +349,12 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
             if (uflag != NUM_TAGE_TABLES) {
                 tageTable[cpu][uflag][tageIndex[cpu][uflag]].tag = tageTag[cpu][uflag];
                 tageTable[cpu][uflag][tageIndex[cpu][uflag]].use = 0;
-                tageTable[cpu][uflag][tageIndex[cpu][uflag]].pred = TAGE_WEAKLY_TAKEN;
+                tageTable[cpu][uflag][tageIndex[cpu][uflag]].pred = taken ? TAGE_WEAKLY_TAKEN : TAGE_WEAKLY_NOT_TAKEN;
             } else {
                 for (int i = predtable + 1; i < NUM_TAGE_TABLES; ++i) {
-                    --(tageTable[cpu][i][tageIndex[cpu][i]].use);
-                    assert(tageTable[cpu][i][tageIndex[cpu][i]].use >= 0);
+                    if (tageTable[cpu][i][tageIndex[cpu][i]].use > 0)
+                        --(tageTable[cpu][i][tageIndex[cpu][i]].use);
+                    // assert(tageTable[cpu][i][tageIndex[cpu][i]].use >= 0);
                 }
             }
         }
