@@ -50,11 +50,13 @@ run() {
     (cat results_${N_SIM}M/${1}-$BINARY-no-no-no-no-lru-1core.txt | grep "CPU 0 cumulative IPC:\|CPU 0 Branch Prediction Accuracy:" ) >> $RESULT
     (cat results_${N_SIM}M/${1}-$BINARY-no-no-no-no-lru-1core.txt | grep -A 8 "Branch types" ) >> $RESULT
     echo "---------------------------------------" >> $RESULT
+    echo "output file: $RESULT"
 }
 
 case $NUM in
 
   0)
+    echo "$RESULT" >> $RESULT
     echo " running all 7 traces..."
     for i in "${TRACES[@]}"
     do
@@ -62,9 +64,11 @@ case $NUM in
     done
     ;;
   [1-7])
+    echo "$RESULT" >> $RESULT
     run ${TRACES[ $NUM - 1 ]}
     ;;
   8)
+    echo "$RESULT" >> $RESULT
     echo "running all traces from dpc3_traces..."
     TRACES=($(ls ${TRACE_DIR}))
     for i in "${TRACES[@]}"
