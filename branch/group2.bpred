@@ -1,30 +1,29 @@
 #include "ooo_cpu.h"
 #include <bitset>
 
-#define GLOBAL_HISTORY_LENGTH   1000
+#define GLOBAL_HISTORY_LENGTH   500
 #define CLOCK_RESET_LIMIT       8192000
 
-#define BIMODAL_SIZE            12      // 2^12 : Num entries in bimodal table
-#define BIMODAL_PRIME           4093
+#define BIMODAL_SIZE            10      // 2^10 : Num entries in bimodal table
+#define BIMODAL_PRIME           1021
 #define TAGE_SIZE               12      // 2^12 : Num entries in tage table
-#define LOOP_SIZE               10      // 2^10 : Num entries in loop table
-#define LOOP_PRIME              1021
+#define LOOP_SIZE               8       // 2^8 : Num entries in loop table
+#define LOOP_PRIME              251
 
 #define NUM_TAGE_TABLES         9
 #define NUM_CSR_TAGS            2
 #define BIMODAL_PRED_SIZE       2       // Pred variable in Bimodal table
 #define TAGE_PRED_SIZE          3       // Pred variable in tage table
 #define TAGE_USEFUL_SIZE        2       // Useful variable in tage table
-#define TAGE_TAG_SIZE           12      // Tag variable in tage table
-#define LOOP_TAG_SIZE           14      // Tag variable in loop table
-#define LOOP_TAG_PRIME          16381
-#define LOOP_IT_SIZE            14      // 2^14 : Num loop iteration in entry
-#define LOOP_CURR_SIZE          14      // 2^14 : Num current iteration in entry
+#define LOOP_TAG_SIZE           12      // Tag variable in loop table
+#define LOOP_TAG_PRIME          4093
+#define LOOP_IT_SIZE            12      // 2^12 : Num loop iteration in entry
+#define LOOP_CURR_SIZE          12      // 2^12 : Num current iteration in entry
 #define LOOP_AGE_SIZE           8       // 2^8 : Num age in entry
 #define LOOP_CONF_SIZE          2       // Confidence variable in loop table
 
-#define LOOP_IT_MAX             14      // 2^14 : Max iteration count
-#define LOOP_IT_MIN             1       // predict only if iterCount > LOOP_IT_MIN
+#define LOOP_IT_MAX             12      // 2^12 : Max iteration count
+#define LOOP_IT_MIN             2       // predict only if iterCount > LOOP_IT_MIN
 #define LOOP_AGE_MAX            8       // 2^8 : Highest possible age
 #define LOOP_CONF_MAX           3       // b(11)
 #define TAGE_USEFUL_MAX         3       // b(11)
@@ -34,22 +33,41 @@
 #define TAGE_WEAKLY_TAKEN       4       // 3 bit
 #define TAGE_WEAKLY_NOT_TAKEN   3       // 3 bit
 
-// TODO: Change this (length of history for indexing on tage tables)
-#define TAGE_HISTORY_1          5
-#define TAGE_HISTORY_2          9
-#define TAGE_HISTORY_3          15
-#define TAGE_HISTORY_4          26
-#define TAGE_HISTORY_5          44
-#define TAGE_HISTORY_6          76
-#define TAGE_HISTORY_7          130
-#define TAGE_HISTORY_8          254
-#define TAGE_HISTORY_9          495
+#define TAGE_HISTORY_1          5  
+#define TAGE_HISTORY_2          9  
+#define TAGE_HISTORY_3          14 
+#define TAGE_HISTORY_4          25 
+#define TAGE_HISTORY_5          42 
+#define TAGE_HISTORY_6          71 
+#define TAGE_HISTORY_7          121
+#define TAGE_HISTORY_8          205
+#define TAGE_HISTORY_9          349
+
+#define TAGE_SIZE_1             12
+#define TAGE_SIZE_2             12
+#define TAGE_SIZE_3             12
+#define TAGE_SIZE_4             12
+#define TAGE_SIZE_5             12
+#define TAGE_SIZE_6             11
+#define TAGE_SIZE_7             11
+#define TAGE_SIZE_8             11
+#define TAGE_SIZE_9             11
+
+#define TAGE_TAG_SIZE_1         7
+#define TAGE_TAG_SIZE_2         8
+#define TAGE_TAG_SIZE_3         8
+#define TAGE_TAG_SIZE_4         9
+#define TAGE_TAG_SIZE_5         12
+#define TAGE_TAG_SIZE_6         12
+#define TAGE_TAG_SIZE_7         13
+#define TAGE_TAG_SIZE_8         13
+#define TAGE_TAG_SIZE_9         14
 
 #define CLOCK_STATE_1           1       // reset LSB of u
 #define CLOCK_STATE_2           2       // reset MSB of u
 
-#define USE_ALT_ON_NA_MAX       15
-#define USE_ALT_ON_NA_INIT      7
+#define USE_ALT_ON_NA_MAX       15      // b(1111) 4-bit USE_ALT_ON_NA 
+#define USE_ALT_ON_NA_INIT      7       // b(0111)
 
 #define TAKEN                   1
 #define NOT_TAKEN               0
@@ -61,7 +79,7 @@ typedef struct bimodalEntry {
 typedef struct tageEntry {
     uint8_t pred : TAGE_PRED_SIZE;
     uint8_t use : TAGE_USEFUL_SIZE;
-    uint16_t tag : TAGE_TAG_SIZE;
+    uint16_t tag;
 } tage_t;
 
 typedef struct loopEntry {
@@ -112,6 +130,30 @@ uint32_t tageHistory[NUM_TAGE_TABLES] = {
     TAGE_HISTORY_9
 };
 
+uint32_t tageTagSize[NUM_TAGE_TABLES] = {
+    TAGE_TAG_SIZE_1,
+    TAGE_TAG_SIZE_2,
+    TAGE_TAG_SIZE_3,
+    TAGE_TAG_SIZE_4,
+    TAGE_TAG_SIZE_5,
+    TAGE_TAG_SIZE_6,
+    TAGE_TAG_SIZE_7,
+    TAGE_TAG_SIZE_8,
+    TAGE_TAG_SIZE_9
+};
+
+uint32_t tageSize[NUM_TAGE_TABLES] = {
+    TAGE_SIZE_1,
+    TAGE_SIZE_2,
+    TAGE_SIZE_3,
+    TAGE_SIZE_4,
+    TAGE_SIZE_5,
+    TAGE_SIZE_6,
+    TAGE_SIZE_7,
+    TAGE_SIZE_8,
+    TAGE_SIZE_9
+};
+
 uint8_t offset[NUM_TAGE_TABLES] = { 0, 0, 0, 0, 2, 2, 2, 3, 3 };
 
 bitset<GLOBAL_HISTORY_LENGTH> history;
@@ -127,12 +169,12 @@ uint8_t min(uint8_t a, uint8_t b) {
 void init_csr(uint32_t cpu, int table) {
     // initialize tage indexing csr
     csrIndex[cpu][table].value = 0;
-    csrIndex[cpu][table].targetLength = TAGE_SIZE;
+    csrIndex[cpu][table].targetLength = tageSize[table];
     
     // initialize tage tag csr0 and csr1
     for (int i = 0; i < NUM_CSR_TAGS; ++i) {
         csrTag[cpu][table][i].value = 0;
-        csrTag[cpu][table][i].targetLength = TAGE_TAG_SIZE - i;
+        csrTag[cpu][table][i].targetLength = tageTagSize[table] - i;
     }
 }
 
@@ -155,18 +197,19 @@ void update_csr(uint32_t cpu, int table) {
 }
 
 uint32_t get_index(uint32_t cpu, uint64_t ip, int table) {
-    uint32_t index = ip ^ (ip >> TAGE_SIZE) ^ (ip >> (TAGE_SIZE * 2)) ^ (ip >> (TAGE_SIZE * 3)) ^ csrIndex[cpu][table].value ^ path_history ^ (path_history & ((1<<offset[table])-1));
-	return (index & ((1 << TAGE_SIZE) - 1));
+    uint8_t tage_size = tageSize[table];
+    uint32_t index = ip ^ (ip >> tage_size) ^ csrIndex[cpu][table].value ^ path_history ^ (path_history & ((1<<offset[table])-1));
+	return (index & ((1 << tage_size) - 1));
 }
 
 uint32_t get_tag(uint32_t cpu, uint64_t ip, int table) {
     uint32_t tag = ip ^ csrTag[cpu][table][0].value ^ (csrTag[cpu][table][1].value << 1);
-    return (tag & ((1 << TAGE_TAG_SIZE) - 1));
+    return (tag & ((1 << tageTagSize[table]) - 1));
 }
 
 void init_new_loop(loop_t *loop, uint16_t loopTag) {
 	loop->tag = loopTag;
-	loop->age = (1 << LOOP_AGE_MAX) - 1;    // Prevent overflow warning
+	loop->age = (1 << LOOP_AGE_MAX) - 1;
 	loop->currentIter = 1;
 	loop->iterCount = (1 << LOOP_IT_MAX) - 1;
 	loop->conf = 0;
@@ -198,7 +241,6 @@ uint8_t O3_CPU::predict_branch(uint64_t ip)
 {   
     uint16_t loopIndex = ip % LOOP_PRIME;
     uint16_t loopTag = ip % LOOP_TAG_PRIME;
-    // TODO: Remove if helps in reducing memory usage 
     loop_t *loop = &loopTable[cpu][loopIndex];
 
     // Check for the tag-hit and conf in Loop Table
@@ -213,8 +255,8 @@ uint8_t O3_CPU::predict_branch(uint64_t ip)
         tageTag[cpu][i] = get_tag(cpu, ip, i);
     }
 
-    predict[cpu].table = NUM_TAGE_TABLES;       // Init value = 4
-    predict[cpu].altTable = NUM_TAGE_TABLES;    // Init value = 4
+    predict[cpu].table = NUM_TAGE_TABLES;       // Init value = 9
+    predict[cpu].altTable = NUM_TAGE_TABLES;    // Init value = 9
     
     // Check for tag hits (this will be the provider component)
     for (int i = NUM_TAGE_TABLES - 1; i >= 0; --i) {
@@ -325,7 +367,6 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
     }
 
     // Updates on a correct branch prediction
-    // TODO: Optimizations for newly allocated entries
     // STEP 1: Update the "pred" value in provider component
     if (predtable != NUM_TAGE_TABLES) {
         // One of the tage table was the provider component
@@ -376,7 +417,8 @@ void O3_CPU::last_branch_result(uint64_t ip, uint8_t taken)
 
         // Reset either MSB or LSB of u for depending on CLOCK_STATE
         for (int i = 0; i < NUM_TAGE_TABLES; ++i) {
-            for (int j = 0; j < (1 << TAGE_SIZE); ++j)
+            uint32_t tage_size = (1 << tageSize[i]);
+            for (uint32_t j = 0; j < tage_size; ++j)
                 tageTable[cpu][i][j].use &= clockstate;
         }
     }
