@@ -1,0 +1,5 @@
+bin/
+dpc3_traces/
+obj/
+prefetcher/*.cpp
+results_50M/
