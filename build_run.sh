@@ -1,54 +1,73 @@
 #!/bin/bash
 
-TRACES=(  "641.leela_s-1052B.champsimtrace.xz" "641.leela_s-1083B.champsimtrace.xz" "641.leela_s-149B.champsimtrace.xz" "641.leela_s-334B.champsimtrace.xz" "641.leela_s-602B.champsimtrace.xz" "641.leela_s-800B.champsimtrace.xz" "641.leela_s-862B.champsimtrace.xz")
+TRACES=(  "client_005.champsimtrace.xz" "server_004.champsimtrace.xz" "server_018.champsimtrace.xz" "server_027.champsimtrace.xz" "server_037.champsimtrace.xz" )
+BINARY="hashed_perceptron"
+NUM=-1
+BUILD=NO
+L1I="group2"
+L1D="group2"
+L2C="group2"
 
-BINARY="group2"
+for i in "$@"
+do
+case $i in
+    -t=*|--trace=*)
+    NUM="${i#*=}"
+    shift # past argument=value
+    ;;
+    -b|--build)
+    BUILD=YES
+    shift # past argument=value
+    ;;
+    -l1i=*|--l1i_pref=*)
+    L1I="${i#*=}"
+    shift # past argument=value
+    ;;
+    -l1d=*|--l1d_pref=*)
+    L1D="${i#*=}"
+    shift # past argument=value
+    ;;
+    -l2c=*|--l2c_pref=*)
+    L2C="${i#*=}"
+    shift # past argument=value
+    ;;
+    *)
+          # unknown option
+    ;;
+esac
+done
 
-if [ "$#" -lt 2 ]; then
-    echo "Illegal number of parameters"
-    echo "Usage: ./build_run.sh [NUMBER] [BUILD] [predictor(optional) default:group2]"
-    echo "NUMBER: 0-8, BUILD: 0(run) or 1(build and run)"
-    echo "0: run all 7 traces"
-    for i in $(seq 1 7)
-    do
-        echo "$i: trace- ${TRACES[$i -1]}"
-    done
-    echo "8: run all the traces in dpc3_traces"
+if [ $NUM == -1 ]
+then
+    echo "-t are necessary"
     exit 1
 fi
 
-if [ ! -z "${3}" ]
-  then
-    BINARY=${3}
+TRACE_DIR=$PWD/dpc3_traces
+BINARY_FILE="$BINARY-$L1I-$L1D-$L2C-no-lru-1core"
+N_WARM=50
+N_SIM=50
+RESULT="result_$L1I-$L1D-$L2C-$(date +%s).txt"
+
+if [[ ! -f "./bin/$BINARY_FILE" ]]; then
+  BUILD=YES
 fi
 
-NUM=${1}
-BUILD=${2}
-TRACE_DIR=$PWD/dpc3_traces
-BINARY_FILE="$BINARY-no-no-no-no-lru-1core"
-N_WARM=50
-N_SIM=200
-RESULT="result_${BINARY}_$(date +%s).txt"
-
 case $BUILD in
-    0) 
-        echo "using old $BINARY file"
+    YES)
+        echo "building new $BINARY_FILE file..."
+        ./build_champsim.sh $BINARY $L1I $L1D $L2C no lru 1
       ;;
-    1)
-        echo "building new $BINARY file..."
-        ./build_champsim.sh $BINARY no no no no lru 1
-      ;;
-    *)
-        echo "[ERROR] Invalid BUILD number"
-        exit 1
+    *)  
+        echo "using old $BINARY_FILE file"
 esac
 
 run() {
     echo "running trace: $1"
     ./run_champsim.sh ${BINARY_FILE} ${N_WARM} ${N_SIM} ${1}
     echo ${1} >> $RESULT
-    (cat results_${N_SIM}M/${1}-$BINARY-no-no-no-no-lru-1core.txt | grep "CPU 0 cumulative IPC:\|CPU 0 Branch Prediction Accuracy:" ) >> $RESULT
-    (cat results_${N_SIM}M/${1}-$BINARY-no-no-no-no-lru-1core.txt | grep -A 8 "Branch types" ) >> $RESULT
+    (cat results_${N_SIM}M/${1}-$BINARY_FILE.txt | grep "CPU 0 cumulative IPC:\|CPU 0 Branch Prediction Accuracy:" ) >> $RESULT
+    (cat results_${N_SIM}M/${1}-$BINARY_FILE.txt | grep -A 8 "Branch types" ) >> $RESULT
     echo "---------------------------------------" >> $RESULT
     echo "output file: $RESULT"
 }
@@ -57,17 +76,17 @@ case $NUM in
 
   0)
     echo "$RESULT" >> $RESULT
-    echo " running all 7 traces..."
+    echo " running all 5 traces..."
     for i in "${TRACES[@]}"
     do
 	    run $i
     done
     ;;
-  [1-7])
+  [1-5])
     echo "$RESULT" >> $RESULT
     run ${TRACES[ $NUM - 1 ]}
     ;;
-  8)
+  6)
     echo "$RESULT" >> $RESULT
     echo "running all traces from dpc3_traces..."
     TRACES=($(ls ${TRACE_DIR}))
